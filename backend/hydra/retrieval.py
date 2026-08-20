@@ -7,6 +7,7 @@ alongside semantic search results. This is the core of the impact analysis engin
 
 Reference: https://docs.hydradb.com/essentials/v2/context-graphs
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Triplet:
     """A single source → relation → target triple from HydraDB graph_context."""
+
     source_name: str
     source_type: str
     predicate: str
@@ -34,6 +36,7 @@ class Triplet:
 @dataclass
 class DependencyPath:
     """A multi-hop chain of triplets from a query_path."""
+
     triplets: list[Triplet]
     relevancy_score: float
     group_id: str
@@ -56,6 +59,7 @@ class DependencyPath:
 @dataclass
 class RetrievalResult:
     """Full result from a HydraDB graph-aware query."""
+
     query: str
     chunks: list[dict[str, Any]]
     dependency_paths: list[DependencyPath]
@@ -114,7 +118,7 @@ class HydraRetrieval:
                 "query": query,
                 "type": "knowledge",
                 "query_by": "hybrid",
-                "mode": "thinking",   # required for forceful relations + multi-hop
+                "mode": "thinking",  # required for forceful relations + multi-hop
                 "graph_context": True,  # return dependency paths
                 "query_forceful_relations": True,
                 "max_results": top_k,
@@ -172,10 +176,10 @@ class HydraRetrieval:
         entity_name: str,
     ) -> RetrievalResult:
         """Which test functions test this entity?"""
-        query = f"Which tests cover {entity_name}? What test functions test {entity_name}?"
-        return self.query_with_graph(
-            database, query, metadata_filters=None
+        query = (
+            f"Which tests cover {entity_name}? What test functions test {entity_name}?"
         )
+        return self.query_with_graph(database, query, metadata_filters=None)
 
     # ── Context relations ──────────────────────────────────────────────────
 
@@ -193,7 +197,9 @@ class HydraRetrieval:
                 database=database,
                 source_id=source_id,
             )
-            return result.data.relations if result.data and result.data.relations else []
+            return (
+                result.data.relations if result.data and result.data.relations else []
+            )
         except Exception as exc:
             raise HydraRetrievalError(
                 f"Failed to retrieve relations for '{source_id}' in '{database}'",
@@ -216,7 +222,9 @@ class HydraRetrieval:
             if gc:
                 raw_graph = {
                     "query_paths_count": len(getattr(gc, "query_paths", []) or []),
-                    "chunk_relations_count": len(getattr(gc, "chunk_relations", []) or []),
+                    "chunk_relations_count": len(
+                        getattr(gc, "chunk_relations", []) or []
+                    ),
                 }
 
         return RetrievalResult(
@@ -232,12 +240,21 @@ class HydraRetrieval:
         chunks = []
         if not (hasattr(raw, "data") and raw.data and hasattr(raw.data, "chunks")):
             return chunks
-        for chunk in (raw.data.chunks or []):
+        for chunk in raw.data.chunks or []:
+            # HydraDB v2 SDK uses chunk_content and relevancy_score
+            text_val = getattr(chunk, "chunk_content", None) or getattr(
+                chunk, "text", ""
+            )
+            score_val = getattr(chunk, "relevancy_score", None)
+            if score_val is None:
+                score_val = getattr(chunk, "score", 0.0)
+
             chunk_dict: dict[str, Any] = {
                 "id": getattr(chunk, "id", None),
-                "text": getattr(chunk, "text", ""),
-                "score": getattr(chunk, "score", 0.0),
-                "source_id": getattr(chunk, "source_id", None),
+                "text": text_val,
+                "score": score_val,
+                "source_id": getattr(chunk, "source_id", None)
+                or getattr(chunk, "id", None),
                 "metadata": {},
             }
             # Pull metadata if available
@@ -263,7 +280,9 @@ class HydraRetrieval:
           - query_paths: multi-hop chains from query → retrieved chunks
           - chunk_relations: paths between retrieved chunks
         """
-        if not (hasattr(raw, "data") and raw.data and hasattr(raw.data, "graph_context")):
+        if not (
+            hasattr(raw, "data") and raw.data and hasattr(raw.data, "graph_context")
+        ):
             return [], []
 
         gc = raw.data.graph_context
@@ -277,30 +296,36 @@ class HydraRetrieval:
     def _parse_paths(self, raw_paths: list[Any]) -> list[DependencyPath]:
         """Parse a list of raw path objects into DependencyPath instances."""
         paths = []
-        for rp in (raw_paths or []):
+        for rp in raw_paths or []:
             triplets = []
-            for rt in (getattr(rp, "triplets", None) or []):
+            for rt in getattr(rp, "triplets", None) or []:
                 src = getattr(rt, "source", None)
                 rel = getattr(rt, "relation", None)
                 tgt = getattr(rt, "target", None)
                 if src and rel and tgt:
-                    triplets.append(Triplet(
-                        source_name=getattr(src, "name", "?"),
-                        source_type=getattr(src, "type", "UNKNOWN"),
-                        predicate=(
-                            getattr(rel, "canonical_predicate", None)
-                            or getattr(rel, "predicate", "?")
-                        ),
-                        target_name=getattr(tgt, "name", "?"),
-                        target_type=getattr(tgt, "type", "UNKNOWN"),
-                        context=getattr(rel, "context", ""),
-                        origin=getattr(rel, "origin", ""),
-                    ))
+                    triplets.append(
+                        Triplet(
+                            source_name=getattr(src, "name", "?"),
+                            source_type=getattr(src, "type", "UNKNOWN"),
+                            predicate=(
+                                getattr(rel, "canonical_predicate", None)
+                                or getattr(rel, "predicate", "?")
+                            ),
+                            target_name=getattr(tgt, "name", "?"),
+                            target_type=getattr(tgt, "type", "UNKNOWN"),
+                            context=getattr(rel, "context", ""),
+                            origin=getattr(rel, "origin", ""),
+                        )
+                    )
             if triplets:
-                paths.append(DependencyPath(
-                    triplets=triplets,
-                    relevancy_score=getattr(rp, "relevancy_score", 0.0),
-                    group_id=getattr(rp, "group_id", ""),
-                    source_chunk_ids=list(getattr(rp, "source_chunk_ids", None) or []),
-                ))
+                paths.append(
+                    DependencyPath(
+                        triplets=triplets,
+                        relevancy_score=getattr(rp, "relevancy_score", 0.0),
+                        group_id=getattr(rp, "group_id", ""),
+                        source_chunk_ids=list(
+                            getattr(rp, "source_chunk_ids", None) or []
+                        ),
+                    )
+                )
         return paths

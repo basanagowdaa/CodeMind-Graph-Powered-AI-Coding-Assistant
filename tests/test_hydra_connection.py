@@ -258,20 +258,42 @@ def test_graph_retrieval_returns_dependency_paths(hydra_client, test_database):
 def test_query_for_impact_analysis(hydra_client, test_database):
     """
     Specialized impact query: what could break if authenticate_user changes?
+
+    NOTE: HydraDB may take several seconds to finish indexing freshly ingested
+    entities. We retry the query with backoff to tolerate indexing latency.
     """
     from backend.hydra.retrieval import HydraRetrieval
 
     retrieval = HydraRetrieval(hydra_client)
-    result = retrieval.query_impact(
-        database=test_database,
-        entity_name="authenticate_user",
-        entity_type="Function",
-    )
 
-    assert result is not None
-    assert isinstance(result.chunks, list)
-    # authenticate_user entity should be in the results
-    chunk_texts = [c.get("text", "") for c in result.chunks]
+    # Retry with backoff — newly ingested entities may not be indexed yet
+    max_attempts = 5
+    backoff_seconds = [3, 5, 8, 10, 15]
+    chunk_texts: list[str] = []
+
+    for attempt in range(max_attempts):
+        result = retrieval.query_impact(
+            database=test_database,
+            entity_name="authenticate_user",
+            entity_type="Function",
+        )
+
+        assert result is not None
+        assert isinstance(result.chunks, list)
+
+        chunk_texts = [c.get("text", "") for c in result.chunks]
+        if any("authenticate_user" in t for t in chunk_texts):
+            break  # success — entity found in results
+
+        if attempt < max_attempts - 1:
+            wait = backoff_seconds[attempt]
+            print(f"\n  [attempt {attempt + 1}/{max_attempts}] "
+                  f"'authenticate_user' not yet in results, "
+                  f"retrying in {wait}s (indexing may be in progress)...")
+            time.sleep(wait)
+
     assert any("authenticate_user" in t for t in chunk_texts), (
-        "Expected 'authenticate_user' to appear in query results"
+        f"Expected 'authenticate_user' to appear in query results after "
+        f"{max_attempts} attempts. Got {len(chunk_texts)} chunks: "
+        f"{[t[:80] for t in chunk_texts]}"
     )

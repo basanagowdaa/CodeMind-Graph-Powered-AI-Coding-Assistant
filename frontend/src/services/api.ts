@@ -5,25 +5,56 @@ import {
   AskResponse,
   ConnectionStatus,
   BenchmarkResponse,
+  SearchResponse,
 } from '../types';
 
 const API_BASE = '/api';
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    ...options,
-  });
-  
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
-    throw new Error(errorBody.detail || errorBody.error || `HTTP error! status: ${res.status}`);
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public detail?: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
   }
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
   
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      signal: controller.signal,
+      ...options,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({}));
+      throw new ApiError(
+        errorBody.detail || errorBody.error || `HTTP error! status: ${res.status}`,
+        res.status,
+        errorBody.detail
+      );
+    }
+    
+    return res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof ApiError) throw err;
+    if ((err as Error).name === 'AbortError') {
+      throw new ApiError('Request timeout', 408);
+    }
+    throw new ApiError((err as Error).message, 0);
+  }
 }
 
 export const api = {
@@ -73,4 +104,15 @@ export const api = {
   // ── Benchmarking ──────────────────────────────────────────────────────────
   runBenchmark: (repositoryId: string) =>
     request<BenchmarkResponse>(`/benchmark/${repositoryId}`),
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  searchCode: (repositoryId: string, query: string, entityTypes?: string[]) =>
+    request<SearchResponse>('/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        repository_id: repositoryId,
+        query,
+        entity_types: entityTypes,
+      }),
+    }),
 };
