@@ -116,7 +116,8 @@ class HydraRetrieval:
                 "query_by": "hybrid",
                 "mode": "thinking",   # required for forceful relations + multi-hop
                 "graph_context": True,  # return dependency paths
-                "top_k": top_k,
+                "query_forceful_relations": True,
+                "max_results": top_k,
             }
             if metadata_filters:
                 kwargs["metadata_filters"] = metadata_filters
